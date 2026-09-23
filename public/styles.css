@@ -684,6 +684,130 @@ td.move-cell.flash { animation: cellflash 1s ease; }
   margin: 4px 0 0;
 }
 
+/* ---------- 批量口令 ---------- */
+.batch-modal { width: min(720px, 100%); }
+.bc-input {
+  width: 100%;
+  background: #141722;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px 11px;
+  font-size: 0.88rem;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  line-height: 1.6;
+  resize: vertical;
+}
+.bc-input:focus { outline: none; border-color: var(--accent); }
+.bc-input::placeholder { color: #5a6076; }
+
+.bc-errors {
+  margin: 10px 0 4px;
+  border: 1px solid #6e2b30;
+  background: #2a1a1e;
+  border-radius: 8px;
+  padding: 9px 12px;
+}
+.bc-err-head { margin: 0 0 6px; color: #ff9a9d; font-size: 0.8rem; font-weight: 700; }
+.bc-err-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 3px 0;
+  font-size: 0.78rem;
+  border-top: 1px dashed #4a2a30;
+}
+.bc-err-line:first-of-type { border-top: none; }
+.bc-lineno {
+  flex: none;
+  color: #ff8f93;
+  font-weight: 700;
+  font-size: 0.74rem;
+}
+.bc-err-msg { color: #f1c2c4; }
+.bc-err-raw {
+  margin-left: auto;
+  color: var(--text-dim);
+  background: #141722;
+  border-radius: 5px;
+  padding: 1px 7px;
+  font-size: 0.72rem;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bc-preview { margin-top: 10px; }
+.bc-reject {
+  margin: 0;
+  border: 1px solid #6e2b30;
+  background: #2a1a1e;
+  color: #ffb0b3;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 0.82rem;
+}
+.bc-recheck-hint {
+  margin: 10px 0 0;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+.bc-block-list { margin: 8px 0 0; padding-left: 20px; color: #f1c2c4; font-size: 0.8rem; }
+.bc-block-list li { padding: 2px 0; }
+.bc-pv-summary {
+  margin: 0 0 8px;
+  border: 1px solid #3c4a35;
+  background: #1f2a1d;
+  color: #bfe0b4;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+}
+.bc-pv-summary b { color: #d8f3cd; }
+.bc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.bc-table th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 600;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.bc-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #2a2f42;
+  white-space: nowrap;
+}
+.bc-table tr.bc-changed td { background: rgba(232, 176, 75, 0.08); }
+.bc-table .bc-ln { color: var(--text-dim); font-size: 0.72rem; }
+.bc-table .ac-dot {
+  display: inline-block;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.bc-table .bc-arrow { color: var(--accent); font-weight: 700; text-align: center; }
+.mv-glyph { color: var(--accent); margin-right: 3px; }
+.bc-mv-new .mv-glyph { color: var(--ok); }
+.bc-tag {
+  display: inline-block;
+  font-size: 0.66rem;
+  color: #1b1304;
+  background: var(--accent);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-left: 4px;
+}
+.bc-tag-same { background: #444b63; color: var(--text-dim); }
+
 /* ---------- 只读报告查看器 ---------- */
 .viewer-overlay {
   position: fixed;

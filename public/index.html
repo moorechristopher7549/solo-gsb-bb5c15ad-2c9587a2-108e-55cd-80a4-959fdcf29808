@@ -109,6 +109,8 @@
       <div class="toolbar-group">
         <button type="button" id="addBeatBtn" class="btn btn-sm">＋ 添加拍</button>
         <button type="button" id="removeBeatBtn" class="btn btn-sm">－ 删除末拍</button>
+        <button type="button" id="batchCmdBtn" class="btn btn-sm"
+          title="粘贴多行「拍号 演员名 方向」口令，校验并预览后一次性写入">📜 批量口令</button>
         <button type="button" id="exportBtn" class="btn btn-sm">导出 JSON</button>
         <button type="button" id="importBtn" class="btn btn-sm">导入 JSON</button>
         <input type="file" id="importFile" accept="application/json,.json" class="hidden">
@@ -126,6 +128,35 @@
       朝舞台外移动的动作会被立即拦截（红框），该演员该拍原地不动。改动自动保存到本浏览器。
     </p>
   </section>
+
+  <!-- 批量口令 -->
+  <div id="batchModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="批量口令">
+    <div class="modal batch-modal">
+      <div class="modal-header">
+        <h2>📜 批量口令</h2>
+        <button type="button" class="row-btn" id="bcCloseX" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <label class="rp-field">
+          <span class="rp-label">每行一条口令：拍号 演员名 方向（空格分隔）</span>
+          <textarea id="bcInput" class="bc-input" rows="8" spellcheck="false"
+            placeholder="2 阿甲 右&#10;3 阿乙 原地&#10;方向限：上 / 下 / 左 / 右 / 原地；拍号限当前已有拍次"></textarea>
+        </label>
+        <p class="rp-note" id="bcHint">
+          当前共 <b id="bcBeatsN">4</b> 拍；演员名须与走位表完全一致且唯一、已设起点。
+          校验通过后先在<strong>临时走位副本</strong>上按拍序推演，合并轨迹上出现越界将整批拒绝，
+          取消或关闭不会修改走位。
+        </p>
+        <div id="bcErrors" class="bc-errors hidden"></div>
+        <div id="bcPreview" class="bc-preview"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" id="bcCancel">取消</button>
+        <button type="button" class="btn" id="bcCheck">校验并预览</button>
+        <button type="button" class="btn btn-primary" id="bcSubmit" disabled>确认写入</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 生成排练场记报告 -->
   <div id="reportModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="生成排练场记报告">

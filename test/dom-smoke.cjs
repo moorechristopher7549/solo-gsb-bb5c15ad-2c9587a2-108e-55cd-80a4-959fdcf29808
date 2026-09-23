@@ -118,6 +118,8 @@ function matches(el, tok) {
 
 // 解析 innerHTML 字符串为节点树（覆盖 app.js 模板用到的子集）
 const VOID = new Set(['input', 'br', 'img', 'meta', 'link', 'option']);
+// 浏览器对这些标签的闭合标签做隐式处理：开启同类（或同类兄弟）标签时自动闭合
+const CLOSE_ON_SAME_PEER = new Set(['li', 'tr', 'td', 'th', 'option', 'p', 'option']);
 function parseHtml(html, parent) {
   let i = 0;
   const stack = [parent];
@@ -149,6 +151,23 @@ function parseHtml(html, parent) {
     const tm = tagSrc.match(/^([\w-]+)([\s\S]*)$/);
     if (!tm) { i = gt + 1; continue; }
     const tag = tm[1].toLowerCase();
+    // 隐式闭合：同级同类标签再次开启时，先弹出栈顶同类未闭合标签
+    if (CLOSE_ON_SAME_PEER.has(tag)) {
+      for (let s = stack.length - 1; s > 0; s--) {
+        if (stack[s].tagName.toLowerCase() === tag) {
+          while (stack.length > s) stack.pop();
+          break;
+        }
+      }
+    }
+    // 表格结构：进入 tr 前隐式闭合未关的 td/th；thead/tbody 中的裸行容错
+    if (tag === 'td' || tag === 'th') {
+      for (let s = stack.length - 1; s > 0; s--) {
+        const t = stack[s].tagName.toLowerCase();
+        if (t === 'tr') break;
+        if (t === 'td' || t === 'th') { stack.length = s; break; }
+      }
+    }
     const el = new El(tag);
     const attrRe = /([\w-]+)(?:="([^"]*)")?/g;
     let am;
@@ -258,6 +277,12 @@ const assert = require('node:assert');
 let pass = 0;
 function check(cond, msg) { assert.ok(cond, msg); pass += 1; console.log('  ✓ ' + msg); }
 const click = (id) => ensure(id).click();
+// 垫片的 innerHTML 不含文本节点内容；递归收集 #text 节点拼出可见文本
+function textOf(el) {
+  if (!el) return '';
+  if (el.tagName === '#TEXT') return el.textContent || '';
+  return (el.children || []).map(textOf).join('');
+}
 
 // ---------- 不重叠：演员完全不同（由独立进程模式运行，见文件尾） ----------
 if (process.env.DOM_SMOKE_MODE === 'no-overlap') {
@@ -502,5 +527,107 @@ check(savedArchive().reports.length === reportsCountBefore,
 // 刷新等价口径：存档顶层带 loopRange、报告对象内不含该字段
 check(savedArchive().reports.every((r) => r.loopRange === undefined),
   '只读报告快照内不含播放区间字段');
+
+// ---------- 批量口令 ----------
+// 此时 demo 4 位演员均在、共 3 拍（前面循环测试删拍后重新加回）：
+// 阿丁 beat1=R 在 (8,6) 越界是当前唯一冲突；其余越界拍次动作已随删拍清除。
+const archiveBeforeBatch = JSON.stringify(savedArchive().state);
+check(ensure('batchCmdBtn') !== undefined, '走位表工具栏存在「批量口令」入口');
+click('batchCmdBtn');
+check(!ensure('batchModal').classList.contains('hidden'), '批量口令弹窗打开');
+check(ensure('bcBeatsN').textContent === '3', '弹窗提示当前已有拍次数');
+check(ensure('bcSubmit').disabled === true, '未校验时「确认写入」禁用');
+
+// 1) 含多种逐行错误：格式 / 拍号超范围 / 方向非法 / 未知演员 / 重复组合
+ensure('bcInput').value = [
+  '2 阿丁',          // 1 格式错误
+  '4 阿甲 右',       // 2 拍号 4 不存在
+  '2 阿甲 东',       // 3 方向非法
+  '2 无名氏 右',     // 4 未知演员
+  '2 阿甲 右',       // 5 有效
+  '3 阿乙 左',       // 6 有效
+  '2 阿乙 上',       // 7 与第 8 行重复
+  '2 阿乙 上'        // 8 与第 7 行重复
+].join('\n');
+click('bcCheck');
+let errBox = ensure('bcErrors');
+check(!errBox.classList.contains('hidden'), '错误时列出问题区');
+const errRows = errBox.querySelectorAll('.bc-err-line');
+const errMsgs = errBox.querySelectorAll('.bc-err-msg');
+check(errRows.length === 6, '逐行指出 6 个问题（2 条有效不报错）');
+check(/格式错误/.test(errMsgs[0].textContent), '第 1 行报格式错误');
+check(/拍号 4 不存在/.test(errMsgs[1].textContent), '第 2 行报拍号不存在');
+check(/无法识别/.test(errMsgs[2].textContent) && /东/.test(errMsgs[2].textContent),
+  '第 3 行报方向无法识别');
+check(/无名氏/.test(errMsgs[3].textContent) && /不存在/.test(errMsgs[3].textContent),
+  '第 4 行报未知演员');
+check(/重复/.test(errMsgs[4].textContent) && /第 8 行/.test(errMsgs[4].textContent),
+  '第 7 行指出与第 8 行重复');
+check(/重复/.test(errMsgs[5].textContent) && /第 7 行/.test(errMsgs[5].textContent),
+  '第 8 行指出与第 7 行重复');
+check(ensure('bcSubmit').disabled === true, '存在错误时禁止写入');
+check(JSON.stringify(savedArchive().state) === archiveBeforeBatch,
+  '校验出错不改走位、不落盘');
+
+// 修改输入后上一次结果失效
+ensure('bcInput').value = '2 阿丁 右';
+ensure('bcInput').dispatch('input', { target: ensure('bcInput') });
+check(ensure('bcSubmit').disabled === true, '编辑输入后需重新校验（确认按钮重新禁用）');
+
+// 2) 临时副本越界：整批拒绝，列出本批行号与拍号；与本批无关的既有越界不列出
+click('bcCheck');
+check(errBox.classList.contains('hidden'), '重新校验后旧错误清空');
+const pvReject = ensure('bcPreview').innerHTML;
+check(/整批拒绝/.test(pvReject), '临时副本越界：整批拒绝');
+const blockItems = ensure('bcPreview').querySelectorAll('.bc-block-list li');
+check(blockItems.length === 1, '列出 1 条本批越界');
+check(/第 1 行/.test(blockItems[0].textContent) && /第 2 拍/.test(blockItems[0].textContent) &&
+  /阿丁/.test(blockItems[0].textContent), '列出越界口令的行号、拍号与演员');
+check(ensure('bcSubmit').disabled === true, '越界时禁止写入');
+{
+  const st = savedArchive().state;
+  const ding = st.actors.find((a) => a.name === '阿丁');
+  check(ding.moves['2'] === undefined, '被拒绝的动作未写入真实走位');
+}
+
+// 取消：关闭弹窗，不修改走位
+click('bcCancel');
+check(ensure('batchModal').classList.contains('hidden'), '取消后弹窗关闭');
+check(JSON.stringify(savedArchive().state) === archiveBeforeBatch, '取消不修改走位与存档');
+
+// 3) 全部有效：预览原动作 / 新动作，确认后仅覆盖指定格并一次保存、刷新
+click('batchCmdBtn');
+ensure('bcInput').value = '2 阿甲 左\n2 阿丁 原地\n1 阿丁 原地';
+click('bcCheck');
+check(ensure('bcSubmit').disabled === false, '校验与试推演通过：允许确认写入');
+const pvTbody = ensure('bcPreview').querySelector('.bc-table tbody');
+const pvRows = pvTbody ? pvTbody.querySelectorAll('tr') : [];
+check(pvRows.length === 3, '预览列出 3 个指定格（按拍序）');
+check(/第 1 拍/.test(textOf(pvRows[0])) && /阿丁/.test(textOf(pvRows[0])),
+  '预览按拍序：第 1 拍阿丁在前');
+check(/原地/.test(textOf(pvRows[0])) &&
+  pvRows[0].querySelectorAll('.mv-glyph').length === 2, '每格显示原动作与新动作');
+check(pvRows[0].querySelector('.bc-tag-same') === null &&
+  /覆盖/.test(textOf(pvRows[0])), '阿丁第 1 拍 右 → 原地：标记覆盖');
+check(pvRows[1].querySelector('.bc-tag-same') === null &&
+  pvRows[2].querySelector('.bc-tag-same') !== null,
+  '阿丁第 2 拍原为空（推演口径=原地）：标记不变');{
+  const saved = JSON.parse(storage['stage-blocking:v1']);
+  const jia = saved.state.actors.find((a) => a.name === '阿甲');
+  check(jia.moves['2'] === undefined, '确认前不提前落盘');
+}
+click('bcSubmit');
+check(ensure('batchModal').classList.contains('hidden'), '确认后弹窗关闭');
+{
+  const saved = JSON.parse(storage['stage-blocking:v1']);
+  const jia = saved.state.actors.find((a) => a.name === '阿甲');
+  const ding = saved.state.actors.find((a) => a.name === '阿丁');
+  check(jia.moves['2'] === 'L' && ding.moves['1'] === 'S' && ding.moves['2'] === 'S',
+    '仅指定格被覆盖：阿甲 2=左、阿丁 1/2=原地');
+  check(jia.moves['1'] === 'L', '未指定的格保持原动作（阿甲第 1 拍仍为左）');
+}
+check(ensure('conflictBadge').textContent === '0' &&
+  ensure('conflictBadge').classList.contains('hidden'), '写入后冲突列表刷新：阿丁原越界消除，总数 0');
+check(/批量口令已写入/.test(ensure('toast').textContent), '提示一次保存成功');
 
 console.log('\nDOM 冒烟：' + pass + ' 项全部通过 🎉');

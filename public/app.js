@@ -191,6 +191,161 @@
     return { positions, blocked, collisions, swaps };
   }
 
+  /* ---------------- 批量口令：解析 / 校验 / 临时副本试推演（纯函数，供测试调用） ----
+   * 口令格式：每行「拍号 演员名 方向」，以空白分隔，如 "2 阿甲 右"。
+   *  - 方向仅支持 上 / 下 / 左 / 右 / 原地；拍号限当前已有拍次 1..beats
+   *  - 演员名须在「已设起点」的演员中唯一匹配（未知 / 重名 / 未设起点均逐行报错）
+   *  - 同一演员同一拍重复指定时，相关行全部标记，必须消解后才允许写入
+   * analyzeBatchCommands 只读取当前走位、绝不修改；batchTrial 先把全部指令
+   * 写入深拷贝的临时走位副本，再按拍序推演，返回本批指定格在合并轨迹上的越界。
+   * ------------------------------------------------------------------------- */
+  const BATCH_DIR_BY_TOKEN = { '上': 'U', '下': 'D', '左': 'L', '右': 'R', '原地': 'S' };
+
+  function analyzeBatchCommands(srcState, text) {
+    const state = normalizeState(srcState);
+    const lines = [];
+    const rawLines = String(text == null ? '' : text).split(/\r?\n/);
+    rawLines.forEach((raw, idx) => {
+      const line = idx + 1; // 行号按粘贴文本实际行号（空行也占位）
+      const trimmed = raw.trim();
+      if (!trimmed) { lines.push({ line, raw, blank: true, error: null }); return; }
+      const tokens = trimmed.split(/\s+/);
+      const entry = { line, raw, blank: false, tokens, error: null };
+
+      if (tokens.length < 3) {
+        entry.error = {
+          code: 'format',
+          message: '格式错误：应为「拍号 演员名 方向」三段，以空格分隔（如：2 阿甲 右）'
+        };
+        lines.push(entry);
+        return;
+      }
+
+      // 第一段：拍号（整数，限当前已有拍次；第 0 拍为起点拍，不可指定动作）
+      const beatTok = tokens[0];
+      if (!/^\d+$/.test(beatTok)) {
+        entry.error = {
+          code: 'bad-beat',
+          message: '拍号「' + beatTok + '」无法识别，应为 1～' + state.beats + ' 的整数'
+        };
+      } else {
+        const beat = Number(beatTok);
+        if (beat < 1) {
+          entry.error = { code: 'bad-beat', message: '第 0 拍是起点拍，不能指定动作；拍号范围为 1～' + state.beats };
+        } else if (beat > state.beats) {
+          entry.error = { code: 'bad-beat', message: '拍号 ' + beat + ' 不存在：当前只有 1～' + state.beats + ' 拍' };
+        } else {
+          entry.beat = beat;
+        }
+      }
+
+      // 最后一段：方向
+      const dirTok = tokens[tokens.length - 1];
+      const dir = BATCH_DIR_BY_TOKEN[dirTok];
+      if (!dir) {
+        entry.error = entry.error || {
+          code: 'bad-dir',
+          message: '方向「' + dirTok + '」无法识别，仅支持：上、下、左、右、原地'
+        };
+      } else {
+        entry.dir = dir;
+      }
+
+      // 中间各段以单个空格拼回：兼容含空格的演员名
+      const actorName = tokens.slice(1, -1).join(' ');
+      entry.actorName = actorName;
+      if (!entry.error) {
+        const matches = state.actors.filter((a) => a.name === actorName);
+        if (matches.length === 0) {
+          entry.error = {
+            code: 'unknown-actor',
+            message: '演员「' + actorName + '」不存在：姓名须与走位表完全一致'
+          };
+        } else if (matches.length > 1) {
+          entry.error = {
+            code: 'duplicate-name',
+            message: '演员名「' + actorName + '」匹配到 ' + matches.length +
+              ' 位演员，请先改名使其唯一'
+          };
+        } else if (!matches[0].start) {
+          entry.error = {
+            code: 'no-start',
+            message: '演员「' + actorName + '」尚未设置起点，不能为其指定动作'
+          };
+        } else {
+          entry.actorId = matches[0].id;
+        }
+      }
+      lines.push(entry);
+    });
+
+    // 重复的「演员 + 拍号」组合：涉及的每一行都标出，并给出其余行号
+    const groups = new Map();
+    lines.forEach((en) => {
+      if (en.actorId && en.beat) {
+        const k = en.actorId + '@' + en.beat;
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(en);
+      }
+    });
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      group.forEach((en) => {
+        const others = group.filter((x) => x !== en).map((x) => x.line);
+        en.error = {
+          code: 'dup-combo',
+          message: '与第 ' + others.join('、') + ' 行重复：演员「' + en.actorName +
+            '」第 ' + en.beat + ' 拍被指定了多次'
+        };
+      });
+    }
+
+    const errors = lines.filter((en) => !en.blank && en.error)
+      .map((en) => ({ line: en.line, code: en.error.code, message: en.error.message, raw: en.raw }));
+    const commands = lines.filter((en) => !en.blank && !en.error)
+      .map((en) => ({
+        line: en.line, beat: en.beat, actorId: en.actorId,
+        actorName: en.actorName, dir: en.dir
+      }));
+    const nonBlank = lines.filter((en) => !en.blank).length;
+    return {
+      lines, errors, commands,
+      totalLines: nonBlank,
+      ok: errors.length === 0 && commands.length > 0
+    };
+  }
+
+  // 把全部指令写入深拷贝的临时走位副本，再按拍序推演；
+  // 只返回「本批指定格」在合并后轨迹上的越界（与本批无关的既有越界不列出），
+  // 保证下游位置随本批新动作联动（逐拍推演自然按拍序进行）。
+  function batchTrial(srcState, commands) {
+    const trial = normalizeState(srcState);
+    (commands || []).forEach((cmd) => {
+      const actor = trial.actors.find((a) => a.id === cmd.actorId);
+      if (actor && cmd.beat >= 1 && cmd.beat <= trial.beats && DIRS[cmd.dir]) {
+        actor.moves[String(cmd.beat)] = cmd.dir;
+      }
+    });
+    const trialSim = simulate(trial.actors, trial.beats);
+    const byKey = new Map();
+    (commands || []).forEach((cmd) => byKey.set(cmd.actorId + '@' + cmd.beat, cmd));
+    const blocked = trialSim.blocked
+      .filter((b) => {
+        const cmd = byKey.get(b.actorId + '@' + b.beat);
+        return cmd && cmd.dir === b.dir;
+      })
+      .map((b) => {
+        const cmd = byKey.get(b.actorId + '@' + b.beat);
+        const { c, r } = parseKey(b.from);
+        return {
+          line: cmd.line, beat: b.beat, actorId: b.actorId, actorName: cmd.actorName,
+          dir: b.dir, dirLabel: DIRS[b.dir].label, from: b.from, c, r
+        };
+      })
+      .sort((x, y) => (x.line - y.line) || (x.beat - y.beat));
+    return { state: trial, sim: trialSim, blocked };
+  }
+
   /* ============================================================
    * 排练场记报告：只读快照（纯函数，供测试调用）
    *
@@ -859,6 +1014,7 @@
       module.exports = {
         simulate, normalizeState, clampLoopRange, buildReport, normalizeReport,
         analyzeReports, buildComparison, normalizeComparison,
+        analyzeBatchCommands, batchTrial,
         compactBeatLabels, compareConflictKey,
         DIRS, DIR_ORDER, COLS, ROWS, cellKey, fmtCoord, coordToKey, reportConflictKey
       };
@@ -1611,8 +1767,175 @@
     closeCompareViewer();
     closeCreateReport();
     closeCompareModal();
+    closeBatchModal();
     commit();
     toast('已清空，可重新开始排练', 'ok');
+  }
+
+  /* ============================================================
+   * 批量口令：粘贴多行「拍号 演员名 方向」
+   *
+   * 流程：解析校验（逐行指出未知/重名演员、重复的演员与拍号组合、格式错误）
+   * → 全部指令写入临时走位副本并按拍序推演 → 本批动作越界则整批拒绝
+   * → 预览各格原动作 / 新动作 → 确认后仅覆盖指定格，一次保存并刷新。
+   * 校验 / 取消 / 关闭的任何阶段都不修改当前走位与存档。
+   * ============================================================ */
+  let batchCheck = null; // 最近一次校验成功的结果 { result, trial }，编辑输入即失效
+
+  function openBatchModal() {
+    $('bcBeatsN').textContent = String(state.beats);
+    $('bcInput').value = '';
+    $('bcErrors').className = 'bc-errors hidden';
+    $('bcErrors').innerHTML = '';
+    $('bcPreview').innerHTML = '';
+    $('bcSubmit').disabled = true;
+    batchCheck = null;
+    $('batchModal').classList.remove('hidden');
+    $('bcInput').focus();
+  }
+  function closeBatchModal() {
+    $('batchModal').classList.add('hidden');
+  }
+
+  // 任意编辑都使上一次预览失效，必须重新校验
+  function invalidateBatchCheck() {
+    batchCheck = null;
+    $('bcSubmit').disabled = true;
+    const pv = $('bcPreview');
+    if (pv.innerHTML) pv.innerHTML = '<p class="bc-recheck-hint">内容已修改，请重新校验。</p>';
+  }
+
+  function renderBatchErrors(errors) {
+    const box = $('bcErrors');
+    if (!errors.length) {
+      box.className = 'bc-errors hidden';
+      box.innerHTML = '';
+      return;
+    }
+    box.className = 'bc-errors';
+    box.innerHTML = '';
+    const head = document.createElement('p');
+    head.className = 'bc-err-head';
+    head.textContent = '共发现 ' + errors.length + ' 个问题，已禁止写入，请逐行修正：';
+    box.appendChild(head);
+    errors.forEach((er) => {
+      const row = document.createElement('div');
+      row.className = 'bc-err-line';
+      row.innerHTML =
+        '<span class="bc-lineno">第 ' + er.line + ' 行</span>' +
+        '<span class="bc-err-msg"></span>' +
+        '<code class="bc-err-raw"></code>';
+      row.querySelector('.bc-err-msg').textContent = er.message;
+      row.querySelector('.bc-err-raw').textContent = er.raw;
+      box.appendChild(row);
+    });
+  }
+
+  // 当前格动作的显示：未设置视为「原地」（推演口径一致）
+  function moveGlyphHtml(dir) {
+    const d = DIRS[dir];
+    return '<span class="mv-glyph">' + d.glyph + '</span><span class="mv-label">' + d.label + '</span>';
+  }
+
+  function renderBatchPreview(result, trial) {
+    const box = $('bcPreview');
+    box.innerHTML = '';
+
+    // 按拍序、演员表顺序排列预览
+    const order = new Map(state.actors.map((a, i) => [a.id, i]));
+    const rows = result.commands
+      .slice()
+      .sort((x, y) => (x.beat - y.beat) ||
+        ((order.get(x.actorId) ?? 999) - (order.get(y.actorId) ?? 999)) || (x.line - y.line));
+
+    const changed = rows.filter((cmd) => moveAt(actorById(cmd.actorId), cmd.beat) !== cmd.dir).length;
+    let html =
+      '<p class="bc-pv-summary">校验通过：共 <b>' + rows.length + '</b> 条指令，涉及 <b>' +
+      new Set(rows.map((r) => r.actorId)).size + '</b> 位演员；其中 <b>' + changed +
+      '</b> 格将被覆盖（其余与原动作相同）。确认后只改这些格子并一次保存。</p>' +
+      '<table class="bc-table"><thead><tr>' +
+      '<th>来源行</th><th>拍号</th><th>演员</th><th>原动作</th><th></th><th>新动作</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach((cmd) => {
+      const actor = actorById(cmd.actorId);
+      const oldDir = moveAt(actor, cmd.beat);
+      const differs = oldDir !== cmd.dir;
+      html +=
+        '<tr class="' + (differs ? 'bc-changed' : 'bc-same') + '">' +
+        '<td class="bc-ln">第 ' + cmd.line + ' 行</td>' +
+        '<td>第 ' + cmd.beat + ' 拍</td>' +
+        '<td><span class="ac-dot" style="background:' + actorColor(actor) + '"></span>' +
+        escapeHtml(cmd.actorName) + '</td>' +
+        '<td class="bc-mv-old">' + moveGlyphHtml(oldDir) + '</td>' +
+        '<td class="bc-arrow">→</td>' +
+        '<td class="bc-mv-new">' + moveGlyphHtml(cmd.dir) +
+        (differs ? ' <span class="bc-tag">覆盖</span>'
+                 : ' <span class="bc-tag bc-tag-same">不变</span>') +
+        '</td></tr>';
+    });
+    box.innerHTML = html + '</tbody></table>';
+  }
+
+  function runBatchCheck() {
+    const text = $('bcInput').value;
+    if (!text.trim()) { toast('请先粘贴口令（每行：拍号 演员名 方向）', 'error'); return; }
+    const result = analyzeBatchCommands(state, text);
+    renderBatchErrors(result.errors);
+    const pv = $('bcPreview');
+    pv.innerHTML = '';
+
+    if (result.errors.length) {
+      pv.innerHTML = '<p class="bc-reject">⛔ 存在格式或匹配错误，未对走位做任何修改；请修正后重新校验。</p>';
+      batchCheck = null;
+      $('bcSubmit').disabled = true;
+      return;
+    }
+    if (!result.commands.length) {
+      pv.innerHTML = '<p class="bc-reject">没有可执行的口令行（只有空行）。</p>';
+      batchCheck = null;
+      $('bcSubmit').disabled = true;
+      return;
+    }
+
+    // 全部指令写入临时走位副本，再按拍序推演；本批指定格越界则整批拒绝
+    const trial = batchTrial(state, result.commands);
+    if (trial.blocked.length) {
+      pv.innerHTML =
+        '<p class="bc-reject">⛔ 临时副本按拍序推演时，本批有 <b>' + trial.blocked.length +
+        '</b> 个动作会越界，<b>已整批拒绝</b>，原走位与存档不变：</p>';
+      const list = document.createElement('ul');
+      list.className = 'bc-block-list';
+      trial.blocked.forEach((b) => {
+        const li = document.createElement('li');
+        li.textContent = '第 ' + b.line + ' 行（第 ' + b.beat + ' 拍）：' + b.actorName +
+          ' 向「' + b.dirLabel + '」会从 (' + b.c + ',' + b.r + ') 走出舞台';
+        list.appendChild(li);
+      });
+      pv.appendChild(list);
+      batchCheck = null;
+      $('bcSubmit').disabled = true;
+      return;
+    }
+
+    renderBatchPreview(result, trial);
+    batchCheck = { result, trial };
+    $('bcSubmit').disabled = false;
+  }
+
+  function submitBatchCommands() {
+    if (!batchCheck) return;
+    // 仅覆盖本批指定格；无副作用地重算一次临时结果，确认与预览一致后写入
+    const trial = batchTrial(state, batchCheck.result.commands);
+    if (trial.blocked.length) { runBatchCheck(); return; }
+    batchCheck.result.commands.forEach((cmd) => {
+      const actor = actorById(cmd.actorId);
+      if (actor) actor.moves[String(cmd.beat)] = cmd.dir;
+    });
+    const n = batchCheck.result.commands.length;
+    closeBatchModal();
+    stopPlay();
+    commit();
+    toast('批量口令已写入：覆盖 ' + n + ' 个动作格，舞台与冲突列表已刷新', 'ok');
   }
 
   /* ============================================================
@@ -2339,6 +2662,17 @@
     });
     $('resetBtn').addEventListener('click', resetAll);
 
+    // 批量口令
+    $('batchCmdBtn').addEventListener('click', openBatchModal);
+    $('bcCloseX').addEventListener('click', closeBatchModal);
+    $('bcCancel').addEventListener('click', closeBatchModal);
+    $('bcCheck').addEventListener('click', runBatchCheck);
+    $('bcSubmit').addEventListener('click', submitBatchCommands);
+    $('bcInput').addEventListener('input', invalidateBatchCheck);
+    $('batchModal').addEventListener('click', (e) => {
+      if (e.target === $('batchModal')) closeBatchModal();
+    });
+
     // 排练场记报告
     $('newReportBtn').addEventListener('click', openCreateReport);
     $('newCompareBtn').addEventListener('click', openCompareModal);
@@ -2398,6 +2732,7 @@
         if (!$('viewerOverlay').classList.contains('hidden')) { closeViewer(); return; }
         if (!$('compareModal').classList.contains('hidden')) { closeCompareModal(); return; }
         if (!$('reportModal').classList.contains('hidden')) { closeCreateReport(); return; }
+        if (!$('batchModal').classList.contains('hidden')) { closeBatchModal(); return; }
         if (settingActorId) {
           settingActorId = null;
           commit();

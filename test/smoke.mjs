@@ -2,7 +2,8 @@
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { simulate, normalizeState, clampLoopRange, buildReport, normalizeReport, DIRS, cellKey,
-  analyzeReports, buildComparison, normalizeComparison, compactBeatLabels, compareConflictKey
+  analyzeReports, buildComparison, normalizeComparison, compactBeatLabels, compareConflictKey,
+  analyzeBatchCommands, batchTrial
 } = require('../public/app.js');
 
 let passed = 0;
@@ -649,6 +650,172 @@ console.log('24) 排练区间循环不影响只读报告快照');
     '报告快照不包含播放区间字段');
   const again = buildReport({ state: src, fromBeat: 2, toBeat: 3 });
   assert(again.fromBeat === 2 && again.toBeat === 3, '报告范围独立于播放区间');
+}
+
+console.log('25) 批量口令：正常解析与逐行校验');
+{
+  const src = {
+    beats: 3,
+    actors: [
+      { id: 'a', name: '阿甲', start: { c: 4, r: 2 }, moves: { '1': 'L' } },
+      { id: 'b', name: '阿乙', start: { c: 5, r: 2 }, moves: {} },
+      { id: 'c', name: '阿丙', start: null, moves: {} }
+    ]
+  };
+  const text = '2 阿甲 右\n\n  3 阿乙 原地 \n1 阿甲 左'; // 含空行与首尾空白
+  const r = analyzeBatchCommands(src, text);
+  assert(r.ok === true, '全部有效：ok=true');
+  assert(r.commands.length === 3 && r.totalLines === 3, '空行被跳过：3 条有效指令');
+  assert(r.lines[2].line === 3 && r.lines[2].actorName === '阿乙', '行号按实际行（空行占行）');
+  assert(r.commands[0].beat === 2 && r.commands[0].dir === 'R', '“2 阿甲 右” → beat2/R');
+  assert(r.commands[1].dir === 'S', '“原地” → S');
+  assert(r.commands[2].dir === 'L' && r.commands[2].actorId === 'a', '“1 阿甲 左” → beat1/L');
+
+  // 含空格的演员名：首尾为拍号/方向，中间整体作为姓名
+  const named = analyzeBatchCommands({
+    beats: 1, actors: [{ id: 'z', name: '路人 甲', start: { c: 1, r: 1 }, moves: {} }]
+  }, '1 路人 甲 上');
+  assert(named.ok && named.commands[0].actorId === 'z' && named.commands[0].dir === 'U',
+    '中间含空格的姓名被整体匹配');
+}
+
+console.log('26) 批量口令：格式 / 拍号 / 方向错误逐行指出');
+{
+  const src = {
+    beats: 3,
+    actors: [{ id: 'a', name: '阿甲', start: { c: 4, r: 2 }, moves: {} }]
+  };
+  const r = analyzeBatchCommands(src, [
+    '2 阿甲',              // 段数不足
+    'x 阿甲 右',           // 拍号非数字
+    '0 阿甲 右',           // 第 0 拍
+    '4 阿甲 右',           // 拍号超范围
+    '2 阿甲 东边',         // 方向非法
+    '2 阿甲 右'            // 正常对照
+  ].join('\n'));
+  assert(r.ok === false && r.commands.length === 1, '仅 1 条有效，ok=false');
+  const codeByLine = {};
+  r.errors.forEach((e) => { codeByLine[e.line] = e.code; });
+  assert(codeByLine[1] === 'format', '第 1 行：格式错误');
+  assert(codeByLine[2] === 'bad-beat', '第 2 行：拍号无法识别');
+  assert(codeByLine[3] === 'bad-beat', '第 3 行：起点拍被拒');
+  assert(codeByLine[4] === 'bad-beat', '第 4 行：拍号超出已有拍次');
+  assert(codeByLine[5] === 'bad-dir', '第 5 行：方向非法');
+  assert(r.errors.every((e) => e.line >= 1 && e.message.length > 0), '每条错误带行号与说明');
+}
+
+console.log('27) 批量口令：未知演员 / 重名演员 / 未设起点');
+{
+  const src = {
+    beats: 2,
+    actors: [
+      { id: 'a', name: '阿甲', start: { c: 1, r: 1 }, moves: {} },
+      { id: 'a2', name: '阿甲', start: { c: 2, r: 1 }, moves: {} },
+      { id: 'c', name: '阿丙', start: null, moves: {} }
+    ]
+  };
+  const r = analyzeBatchCommands(src, [
+    '1 阿丁 右',   // 未知
+    '1 阿甲 上',   // 重名
+    '2 阿丙 左'    // 未设起点
+  ].join('\n'));
+  const codeByLine = {};
+  r.errors.forEach((e) => { codeByLine[e.line] = e.code; });
+  assert(codeByLine[1] === 'unknown-actor', '未知演员逐行指出');
+  assert(codeByLine[2] === 'duplicate-name', '重名（匹配到多人）逐行指出');
+  assert(codeByLine[3] === 'no-start', '未设起点的演员逐行指出');
+  assert(r.commands.length === 0 && r.ok === false, '无有效指令：整批不可写入');
+
+  // 唯一但未设起点：no-start；改名后唯一匹配：通过
+  const one = analyzeBatchCommands({
+    beats: 1, actors: [
+      { id: 'a', name: '阿甲', start: { c: 1, r: 1 }, moves: {} },
+      { id: 'a2', name: '阿甲二', start: { c: 2, r: 1 }, moves: {} }
+    ]
+  }, '1 阿甲 右');
+  assert(one.ok && one.commands[0].actorId === 'a', '唯一姓名精确匹配（不含子串误匹配）');
+}
+
+console.log('28) 批量口令：重复的演员与拍号组合，相关行全部标出');
+{
+  const src = {
+    beats: 3,
+    actors: [
+      { id: 'a', name: '阿甲', start: { c: 1, r: 1 }, moves: {} },
+      { id: 'b', name: '阿乙', start: { c: 2, r: 1 }, moves: {} }
+    ]
+  };
+  const r = analyzeBatchCommands(src, [
+    '1 阿甲 右',
+    '2 阿乙 上',
+    '1 阿甲 原地',  // 与第 1 行重复
+    '1 阿乙 右'    // 同拍不同演员：不重复
+  ].join('\n'));
+  const dupLines = r.errors.filter((e) => e.code === 'dup-combo').map((e) => e.line);
+  assert(dupLines.length === 2 && dupLines.includes(1) && dupLines.includes(3),
+    '重复组合涉及的两行（1、3）全部标出');
+  assert(r.errors.every((e) => e.code === 'dup-combo'), '只有重复错误');
+  assert(r.commands.find((c) => c.beat === 1 && c.actorId === 'b'),
+    '同拍不同演员不算重复');
+  assert(/第 1、3 行|第 3、1 行/.test(r.lines[0].error.message) ||
+    /第 3 行/.test(r.lines[0].error.message), '错误信息互相给出重复行号');
+}
+
+console.log('29) 批量口令：临时副本试推演——越界整批拒绝，只列本批指定格');
+{
+  const src = {
+    beats: 2,
+    actors: [
+      // 阿丁在 (8,6)：既有 beat1=R 已越界（与本批无关），beat2=S
+      { id: 'd', name: '阿丁', start: { c: 8, r: 6 }, moves: { '1': 'R', '2': 'S' } },
+      { id: 'a', name: '阿甲', start: { c: 1, r: 1 }, moves: {} }
+    ]
+  };
+
+  // 本批让阿丁 beat2 再向右：合并轨迹上越界
+  const snapshot = JSON.stringify(src);
+  const bad = analyzeBatchCommands(src, '2 阿丁 右');
+  assert(bad.ok === true && bad.commands.length === 1, '口令本身校验通过');
+  const trial = batchTrial(src, bad.commands);
+  assert(trial.blocked.length === 1, '临时副本按拍序推演：发现 1 个本批越界');
+  assert(trial.blocked[0].line === 1 && trial.blocked[0].beat === 2 &&
+    trial.blocked[0].actorId === 'd' && trial.blocked[0].dir === 'R',
+    '列出越界行号、拍号、演员与方向');
+  assert(trial.blocked[0].c === 8 && trial.blocked[0].r === 6, '记录越界时所在格');
+
+  // 既有 beat1=R 的越界不是本批指定：不列入
+  assert(!trial.blocked.some((b) => b.beat === 1), '与本批无关的既有越界不列出');
+
+  // 关键：试推演不修改原始走位
+  assert(JSON.stringify(src) === snapshot, '临时副本试推演不改动原走位对象');
+
+  // 本批把阿丁 beat1 改成合法的原地后，beat1 不再越界；整体合法
+  const fix = analyzeBatchCommands(src, '1 阿丁 原地');
+  const trialFix = batchTrial(src, fix.commands);
+  assert(trialFix.blocked.length === 0, '覆盖为合法动作后临时副本无越界');
+  assert(src.actors[0].moves[1] === 'R', '试推演后原走位仍保持 R（未写入）');
+}
+
+console.log('30) 批量口令：下游位置随本批动作联动（按拍序推演）');
+{
+  // 阿甲从 (1,1)：本批 beat1=U →(1,2)，beat2=D →(1,1)；beat3=D 会越界（从 r=1）
+  // 若不按拍序联动，就发现不了 beat3 的越界
+  const src = {
+    beats: 3,
+    actors: [{ id: 'a', name: '阿甲', start: { c: 1, r: 1 }, moves: {} }]
+  };
+  const r = analyzeBatchCommands(src, '1 阿甲 上\n2 阿甲 下\n3 阿甲 下');
+  assert(r.ok === true, '三行口令均校验通过');
+  const trial = batchTrial(src, r.commands);
+  assert(trial.blocked.length === 1 && trial.blocked[0].line === 3 &&
+    trial.blocked[0].beat === 3, '按拍序联动后，第 3 行（第 3 拍）越界被识别');
+
+  // 全部合法：覆盖写入临时副本后位置正确
+  const ok = analyzeBatchCommands(src, '1 阿甲 上\n2 阿甲 上');
+  const t2 = batchTrial(src, ok.commands);
+  assert(t2.blocked.length === 0, '连续向上均在界内');
+  assert(t2.sim.positions[1].a === cellKey(1, 2) && t2.sim.positions[2].a === cellKey(1, 3),
+    '临时副本按拍序推演出正确坐标');
 }
 
 console.log('');
