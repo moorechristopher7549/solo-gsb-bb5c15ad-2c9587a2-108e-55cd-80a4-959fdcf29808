@@ -683,6 +683,106 @@ td.move-cell.flash { animation: cellflash 1s ease; }
   padding: 8px 11px;
   margin: 4px 0 0;
 }
+.rp-note code {
+  background: #141722;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 0.72rem;
+  color: #f0c777;
+}
+
+/* ---------- 批量口令弹窗 ---------- */
+.modal-wide { width: min(680px, 100%); }
+.batch-input {
+  width: 100%;
+  resize: vertical;
+  background: #141722;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px 11px;
+  font-size: 0.88rem;
+  line-height: 1.7;
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Segoe UI", system-ui, sans-serif;
+}
+.batch-input:focus { outline: none; border-color: var(--accent); }
+
+.batch-result {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.batch-sec h4 {
+  margin: 0 0 6px;
+  font-size: 0.82rem;
+}
+.batch-errors {
+  border: 1px solid rgba(229, 72, 77, 0.55);
+  background: rgba(229, 72, 77, 0.09);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.batch-overs {
+  border: 1px solid rgba(255, 107, 107, 0.6);
+  background: rgba(255, 107, 107, 0.1);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.batch-ok {
+  border: 1px solid rgba(62, 207, 142, 0.55);
+  background: rgba(62, 207, 142, 0.08);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.batch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+}
+.batch-list li { display: flex; gap: 10px; align-items: baseline; }
+.br-line {
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 999px;
+  padding: 0 8px;
+}
+.batch-warn {
+  margin: 0;
+  color: #f0c986;
+  background: rgba(232, 176, 75, 0.1);
+  border: 1px solid rgba(232, 176, 75, 0.45);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+}
+.batch-table-wrap { overflow-x: auto; }
+.batch-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.batch-preview-table th, .batch-preview-table td {
+  border: 1px solid var(--border);
+  padding: 4px 9px;
+  text-align: center;
+  white-space: nowrap;
+}
+.batch-preview-table th { background: rgba(0, 0, 0, 0.25); font-weight: 600; }
+.batch-preview-table td:nth-child(3) { text-align: left; }
+.batch-preview-table .batch-old { color: var(--text-dim); }
+.batch-preview-table .batch-new { color: #f0c777; font-weight: 600; }
+.batch-arrow { color: var(--text-dim); }
+.batch-nochange { color: var(--text-dim); font-weight: 400; font-size: 0.72rem; }
+.batch-same td { opacity: 0.72; }
+.batch-ok-note { margin: 0; font-size: 0.76rem; color: var(--text-dim); }
 
 /* ---------- 只读报告查看器 ---------- */
 .viewer-overlay {
@@ -1007,6 +1107,7 @@ td.move-cell.flash { animation: cellflash 1s ease; }
   body.printing-report .table-panel,
   body.printing-report #toast,
   body.printing-report #reportModal,
+  body.printing-report #batchModal,
   body.printing-report #compareModal { display: none !important; }
 
   body.printing-report #viewerOverlay,

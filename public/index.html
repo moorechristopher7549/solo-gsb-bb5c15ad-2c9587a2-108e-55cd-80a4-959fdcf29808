@@ -109,6 +109,8 @@
       <div class="toolbar-group">
         <button type="button" id="addBeatBtn" class="btn btn-sm">＋ 添加拍</button>
         <button type="button" id="removeBeatBtn" class="btn btn-sm">－ 删除末拍</button>
+        <button type="button" id="batchBtn" class="btn btn-sm"
+          title="粘贴多行「拍号 演员名 方向」批量录入动作（如：2 阿甲 右）">⌨ 批量口令</button>
         <button type="button" id="exportBtn" class="btn btn-sm">导出 JSON</button>
         <button type="button" id="importBtn" class="btn btn-sm">导入 JSON</button>
         <input type="file" id="importFile" accept="application/json,.json" class="hidden">
@@ -169,9 +171,37 @@
     </div>
   </div>
 
+  <!-- 批量口令：多行「拍号 演员名 方向」一次录入 -->
+  <div id="batchModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="批量口令">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2>⌨ 批量口令</h2>
+        <button type="button" class="row-btn" id="batchCloseX" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="rp-note">
+          每行一条，格式为<strong>「拍号 演员名 方向」</strong>，空格分隔，例如 <code>2 阿甲 右</code>。
+          方向限 <strong>上 / 下 / 左 / 右 / 原地</strong>；拍号限当前已有拍次（1 至当前总拍数，第 0 拍为起点不接受口令）；
+          演员名须唯一匹配一位已设起点的演员。空行会被忽略。
+          校验通过后仅在预览中展示各格<strong>原动作 → 新动作</strong>，确认后才写入走位。
+        </p>
+        <label class="rp-field" for="batchInput">
+          <span class="rp-label">口令（每行一条，可直接粘贴多行）</span>
+          <textarea id="batchInput" class="batch-input" rows="8" spellcheck="false"
+            placeholder="1 阿甲 上&#10;2 阿甲 右&#10;2 阿乙 左&#10;3 阿丙 原地"></textarea>
+        </label>
+        <div id="batchResult" class="batch-result hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" id="batchCancel">取消</button>
+        <button type="button" class="btn" id="batchCheck">校验 / 预览</button>
+        <button type="button" class="btn btn-primary hidden" id="batchSubmit">确认写入</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 报告对比：选择两份只读快照 -->
-  <div id="compareModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="报告对比">
-    <div class="modal">
+  <div id="compareModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="报告对比">    <div class="modal">
       <div class="modal-header">
         <h2>⇄ 报告对比</h2>
         <button type="button" class="row-btn" id="cmpCloseX" aria-label="关闭">✕</button>

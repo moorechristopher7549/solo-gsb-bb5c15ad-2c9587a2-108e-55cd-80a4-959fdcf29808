@@ -503,4 +503,86 @@ check(savedArchive().reports.length === reportsCountBefore,
 check(savedArchive().reports.every((r) => r.loopRange === undefined),
   '只读报告快照内不含播放区间字段');
 
+// ---------- 批量口令 ----------
+// 此时走位为 3 拍（区间测试末尾又删了一拍）：第 1 拍保留 demo 动作
+// （阿甲 L、阿乙 L、阿丙 D、阿丁 R 越界），第 2、3 拍在删拍时被清空。
+const batchStateBefore = JSON.parse(JSON.stringify(savedArchive().state));
+check(batchStateBefore.beats === 3, '批量口令测试起点：当前 3 拍');
+click('batchBtn');
+check(!ensure('batchModal').classList.contains('hidden'), '批量口令弹窗打开');
+
+// 一批混入各类问题的口令
+ensure('batchInput').value = [
+  '1 阿甲 上',       // 合法（阿甲原 1=L，改为 U）
+  '2 某人 右',       // 未知演员
+  '3 阿甲 东',       // 非法方向
+  '9 阿甲 左',       // 拍号超范围
+  '1 阿甲 原地',     // 与第 1 行重复
+  '2 阿乙',          // 段数不足
+  '3 阿丁 上',       // 合并轨迹越界：阿丁第 1 拍 R 被拦截停在 (8,6)，第 3 拍向上出界
+  ''
+].join('\n');
+click('batchCheck');
+const batchHtml = ensure('batchResult').innerHTML;
+check(/未知演员/.test(batchHtml) && /非法方向|方向「东」无效/.test(batchHtml) &&
+  /超出当前拍次范围/.test(batchHtml) && /同一格不能重复/.test(batchHtml) &&
+  /应为/.test(batchHtml), '逐行列出：未知演员 / 非法方向 / 拍号超范围 / 重复组合 / 格式错误');
+check(/越界/.test(batchHtml) && /阿丁/.test(batchHtml), '列出合并轨迹越界行（阿丁向上）');
+check(ensure('batchSubmit').classList.contains('hidden'), '存在问题时隐藏确认写入按钮');
+
+// 取消：走位与存档完全不变
+click('batchCancel');
+check(ensure('batchModal').classList.contains('hidden'), '取消后弹窗关闭');
+check(JSON.stringify(savedArchive().state) === JSON.stringify(batchStateBefore),
+  '校验出错后取消：走位与存档不变');
+
+// 全部有效的批次
+click('batchBtn');
+check(ensure('batchResult').classList.contains('hidden'), '重新打开弹窗：清空上次结果');
+check(ensure('batchSubmit').classList.contains('hidden'), '重新打开弹窗：确认按钮初始隐藏');
+// 阿乙：起点 (5,2)，第 1 拍 L 到 (4,2)，第 2 拍下到 (4,1) 合法
+// 阿丙：起点 (4,5)，1 拍下到 (4,4)，2 拍下到 (4,3)，第 3 拍原地
+ensure('batchInput').value = [
+  '1 阿甲 上',
+  '2 阿乙 下',
+  '3 阿丙 原地'
+].join('\n');
+click('batchCheck');
+const okHtml = ensure('batchResult').innerHTML;
+check(/全部 3 条口令有效/.test(okHtml), '全部有效：显示通过提示');
+check(okHtml.indexOf('阿甲') >= 0 && okHtml.indexOf('阿乙') >= 0 && okHtml.indexOf('阿丙') >= 0,
+  '预览逐格列出演员');
+check(/原动作/.test(okHtml) && /新动作/.test(okHtml), '预览表头含原动作与新动作');
+check(okHtml.indexOf('◁') >= 0 && okHtml.indexOf('△') >= 0, '预览展示具体动作符号（原 ◁ / 新 △）');
+check(!ensure('batchSubmit').classList.contains('hidden'), '全部有效：显示确认写入按钮');
+
+// 确认写入：仅覆盖指定格
+click('batchSubmit');
+check(ensure('batchModal').classList.contains('hidden'), '确认后弹窗关闭');
+const after = savedArchive().state;
+const aAfter = after.actors.find((x) => x.name === '阿甲');
+check(aAfter.moves['1'] === 'U', '指定格被覆盖：阿甲第 1 拍 = 上');
+check(aAfter.moves['2'] === undefined && aAfter.moves['3'] === undefined,
+  '未指定格保持原状：阿甲第 2、3 拍仍未设置');
+const bAfter = after.actors.find((x) => x.name === '阿乙');
+check(bAfter.moves['2'] === 'D', '指定格被覆盖：阿乙第 2 拍 = 下');
+check(bAfter.moves['1'] === 'L', '未指定格保持原动作：阿乙第 1 拍仍为左');
+check(bAfter.moves['3'] === undefined, '未指定格保持原状：阿乙第 3 拍仍未设置');
+const dAfter = after.actors.find((x) => x.name === '阿丁');
+check(dAfter.moves['1'] === 'R', '未指定演员动作完全不变：阿丁第 1 拍仍为 R');
+
+// ✕ 关闭弹窗同样不修改走位
+click('batchBtn');
+check(!ensure('batchModal').classList.contains('hidden'), '再次打开批量弹窗');
+const beforeEsc = JSON.stringify(savedArchive().state);
+click('batchCloseX');
+check(ensure('batchModal').classList.contains('hidden'), '✕ 按钮关闭批量弹窗');
+check(JSON.stringify(savedArchive().state) === beforeEsc, '关闭弹窗不再次写入走位');
+
+// 无演员时入口拦截
+click('resetBtn');
+check(savedArchive().state.actors.length === 0, '清空全部：走位被清空');
+click('batchBtn');
+check(ensure('batchModal').classList.contains('hidden'), '没有演员时批量口令入口被拦截');
+
 console.log('\nDOM 冒烟：' + pass + ' 项全部通过 🎉');

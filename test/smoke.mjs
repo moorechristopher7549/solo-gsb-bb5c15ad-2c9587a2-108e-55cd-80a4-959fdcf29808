@@ -2,7 +2,8 @@
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { simulate, normalizeState, clampLoopRange, buildReport, normalizeReport, DIRS, cellKey,
-  analyzeReports, buildComparison, normalizeComparison, compactBeatLabels, compareConflictKey
+  analyzeReports, buildComparison, normalizeComparison, compactBeatLabels, compareConflictKey,
+  planBatchCommands
 } = require('../public/app.js');
 
 let passed = 0;
@@ -649,6 +650,159 @@ console.log('24) 排练区间循环不影响只读报告快照');
     '报告快照不包含播放区间字段');
   const again = buildReport({ state: src, fromBeat: 2, toBeat: 3 });
   assert(again.fromBeat === 2 && again.toBeat === 3, '报告范围独立于播放区间');
+}
+
+/* ============================================================
+ * 批量口令 planBatchCommands
+ * ============================================================ */
+
+console.log('25) 批量口令：解析成功、空行忽略、行号按物理行');
+{
+  const src = {
+    beats: 3, actors: [
+      { id: 'a', name: '阿甲', start: { c: 4, r: 3 }, moves: {} },
+      { id: 'b', name: '阿乙', start: { c: 1, r: 1 }, moves: { '1': 'U' } }
+    ]
+  };
+  const text = [
+    '',
+    '1 阿甲 上',      // 第 2 行
+    '   ',            // 空白行
+    '2 阿乙 原地',    // 第 4 行
+    '3 阿甲 右',      // 第 5 行
+    ''
+  ].join('\n');
+  const r = planBatchCommands(src, text);
+  assert(r.ok === true, '全部有效：ok=true');
+  assert(r.nonEmpty === 3, '非空行 3 条（空行忽略）');
+  assert(r.errors.length === 0 && r.overflows.length === 0, '无错误、无越界');
+  assert(r.commands.length === 3, '3 条指令');
+  assert(r.commands[0].line === 2 && r.commands[0].actorId === 'a' &&
+    r.commands[0].beat === 1 && r.commands[0].dir === 'U', '首条带物理行号与解析结果');
+  assert(r.commands[1].dir === 'S' && r.commands[2].dir === 'R', '原地→S、右→R');
+  // changes 按拍序排序
+  assert(r.changes.map((c) => c.beat).join(',') === '1,2,3', '预览按拍序排列');
+
+  // 全角空格同样可分隔
+  const r2 = planBatchCommands(src, '1　阿甲　下');
+  assert(r2.ok === true && r2.commands[0].dir === 'D', '全角空格可作分隔符');
+}
+
+console.log('26) 批量口令：格式 / 拍号 / 方向 / 未知 / 重名 / 未设起点 逐行报错');
+{
+  const src = {
+    beats: 3, actors: [
+      { id: 'a', name: '阿甲', start: { c: 4, r: 3 }, moves: {} },
+      { id: 'a2', name: '阿甲', start: { c: 5, r: 3 }, moves: {} },
+      { id: 'c', name: '阿丙', start: null, moves: {} }
+    ]
+  };
+  const text = [
+    '1 阿甲 右',       // 1 重名 → ambiguous
+    '2 阿丁 右',       // 2 未知演员
+    '3 阿甲 东',       // 3 非法方向
+    '4 阿丙 上',       // 4 拍号超范围（且阿丙未设起点 → 两条错误）
+    'x 阿甲 上',       // 5 拍号非数字
+    '1 阿甲',          // 6 段数不足
+    '1 阿甲 上 右',    // 7 段数过多
+    '0 阿甲 上',       // 8 第 0 拍：超范围
+    '3 阿丙 原地'      // 9 未设起点
+  ].join('\n');
+  const r = planBatchCommands(src, text);
+  assert(r.ok === false, '存在错误：ok=false');
+  assert(r.overflows.length === 0, '无越界（错误指令不进入推演）');
+  const at = (n) => r.errors.filter((e) => e.line === n).map((e) => e.code);
+  assert(at(1)[0] === 'ambiguous-actor', '第 1 行：重名演员');
+  assert(at(2)[0] === 'unknown-actor', '第 2 行：未知演员');
+  assert(at(3)[0] === 'bad-direction', '第 3 行：非法方向');
+  assert(at(4).length === 2 && at(4).includes('beat-range') && at(4).includes('no-start'),
+    '第 4 行：拍号超范围 + 未设起点，两条错误同时给出');
+  assert(at(5)[0] === 'beat-number', '第 5 行：拍号非整数');
+  assert(at(6)[0] === 'field-count' && at(7)[0] === 'field-count', '第 6/7 行：段数错误');
+  assert(at(8)[0] === 'beat-range', '第 8 行：拍号 0 超出 1..beats');
+  assert(at(9)[0] === 'no-start', '第 9 行：演员未设起点');
+  // 重名行与未设起点行不应产出指令
+  assert(r.commands.length === 0, '错误行均不产出指令');
+}
+
+console.log('27) 批量口令：重复的演员+拍号组合只留首行');
+{
+  const src = {
+    beats: 3, actors: [
+      { id: 'a', name: '阿甲', start: { c: 4, r: 3 }, moves: {} }
+    ]
+  };
+  const r = planBatchCommands(src, '1 阿甲 上\n2 阿甲 右\n1 阿甲 原地');
+  assert(r.ok === false, '有重复行：ok=false');
+  const dup = r.errors.filter((e) => e.code === 'duplicate');
+  assert(dup.length === 1 && dup[0].line === 3 && /第 1 行/.test(dup[0].message),
+    '第 3 行重复（同演员同拍已在第 1 行），错误信息指明首次出现行');
+  assert(r.commands.length === 2, '仅前两条成为有效指令');
+}
+
+console.log('28) 批量口令：合并后轨迹越界 → 禁止整批写入（副本隔离）');
+{
+  // 阿甲起点 (4,5)：批内第 1 拍上到 (4,6)，第 2 拍再上即越界
+  // 单独看第 2 行（从起点 (4,5)）是合法的，只有按拍序推演合并轨迹才越界
+  const src = {
+    beats: 3, actors: [
+      { id: 'a', name: '阿甲', start: { c: 4, r: 5 }, moves: {} },
+      { id: 'b', name: '阿乙', start: { c: 8, r: 1 }, moves: {} }
+    ]
+  };
+  const text = '1 阿甲 上\n2 阿甲 上\n1 阿乙 左';
+  const r = planBatchCommands(src, text);
+  assert(r.ok === false && r.errors.length === 0, '语法全对但越界：ok=false、无语法错误');
+  assert(r.overflows.length === 1, '1 条合并轨迹越界');
+  assert(r.overflows[0].line === 2 && r.overflows[0].beat === 2 &&
+    r.overflows[0].name === '阿甲' && r.overflows[0].dir === 'U' &&
+    r.overflows[0].from.c === 4 && r.overflows[0].from.r === 6,
+    '越界定位到第 2 行/第 2 拍，并给出被拦截时所在格 (4,6)');
+  // 阿乙的合法移动不受影响
+  assert(r.changes.some((c) => c.name === '阿乙' && c.dir === 'L'), '其余合法指令仍在预览中');
+
+  // 副本隔离：原走位对象没有被写入任何动作
+  assert(Object.keys(src.actors[0].moves).length === 0, '越界时原走位不被修改');
+  assert(src.actors[1].moves['1'] === undefined, '另一位演员的动作也未写入原走位');
+}
+
+console.log('29) 批量口令：本批把已有越界动作改为合法动作后允许写入');
+{
+  // 阿乙原有第 1 拍向右越界（(8,1)），本批改其为向左：阻塞消失 → 放行
+  const src = {
+    beats: 2, actors: [
+      { id: 'a', name: '阿甲', start: { c: 4, r: 3 }, moves: { '1': 'U', '2': 'U' } },
+      { id: 'b', name: '阿乙', start: { c: 8, r: 1 }, moves: { '1': 'R' } }
+    ]
+  };
+  const r = planBatchCommands(src, '1 阿乙 左\n2 阿甲 下');
+  assert(r.ok === true, '修正越界动作 + 新增合法动作：ok=true');
+  assert(r.overflows.length === 0, '合并轨迹无越界');
+  // 原动作预览：阿乙第 1 拍原 R（越界动作）、阿甲第 2 拍原 U
+  const b1 = r.changes.find((c) => c.actorId === 'b' && c.beat === 1);
+  assert(b1.oldDir === 'R' && b1.dir === 'L' && b1.changed === true, '原动作 R → 新动作 L');
+  const a2 = r.changes.find((c) => c.actorId === 'a' && c.beat === 2);
+  assert(a2.oldDir === 'U' && a2.dir === 'D' && a2.changed === true, '阿甲第 2 拍 U → D');
+}
+
+console.log('30) 批量口令：原动作识别与「无变化」标记；空口令');
+{
+  const src = {
+    beats: 2, actors: [
+      { id: 'a', name: '阿甲', start: { c: 4, r: 3 }, moves: { '1': 'U' } }
+    ]
+  };
+  const r = planBatchCommands(src, '1 阿甲 上\n2 阿甲 原地');
+  assert(r.ok === true, '相同动作也属有效口令');
+  const c1 = r.changes.find((c) => c.beat === 1);
+  assert(c1.oldDir === 'U' && c1.dir === 'U' && c1.changed === false, '第 1 拍与原动作相同：changed=false');
+  const c2 = r.changes.find((c) => c.beat === 2);
+  assert(c2.oldDir === null && c2.dir === 'S' && c2.changed === false,
+    '未设置格按原地推演：oldDir=null，显式下达原地不算动作变化（但仍会覆盖该格）');
+
+  assert(planBatchCommands(src, '').ok === false &&
+    planBatchCommands(src, '').nonEmpty === 0, '空文本不是有效批次');
+  assert(planBatchCommands(src, '\n  \n\t').nonEmpty === 0, '全是空行：nonEmpty=0');
 }
 
 console.log('');
